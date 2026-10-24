@@ -1,0 +1,14 @@
+{
+  "name": "issue-management-system",
+  "version": "1.0.0",
+  "description": "Enterprise Issue Management System Website",
+  "scripts": {
+    "dev:backend": "cd backend && npm run dev",
+    "dev:frontend": "cd frontend && npm run dev",
+    "seed": "cd backend && npm run prisma:seed",
+    "build": "cd backend && npm run build && cd ../frontend && npm run build"
+  },
+  "keywords": ["issue-management", "react", "express", "prisma", "sqlite", "postgresql"],
+  "author": "",
+  "license": "ISC"
+}
