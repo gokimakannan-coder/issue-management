@@ -1,38 +1,30 @@
-# IssueFlow Enterprise — Deployment Guide
+# IssueFlow Enterprise — Deployment Guide (SQLite Demo)
 
-Production stack: **Render** (backend + PostgreSQL) · **Vercel** (frontend)
+Production stack: **Render** (backend + SQLite) · **Vercel** (frontend)
+
+> **Demo setup — SQLite on Render's ephemeral disk.**
+> This is the right choice for a quick demo. See the [SQLite limitations](#sqlite-limitations-on-render) section before inviting permanent users.
 
 ---
 
 ## Table of Contents
 
-1. [Local Development with PostgreSQL](#1-local-development-with-postgresql)
-2. [Apply Migrations](#2-apply-migrations)
-3. [Seed Demo Users](#3-seed-demo-users)
-4. [Deploy Backend to Render](#4-deploy-backend-to-render)
-5. [Deploy Frontend to Vercel](#5-deploy-frontend-to-vercel)
-6. [Wire the Two Services Together](#6-wire-the-two-services-together)
+1. [Local Development](#1-local-development)
+2. [Seed Demo Users](#2-seed-demo-users)
+3. [Deploy Backend to Render](#3-deploy-backend-to-render)
+4. [Deploy Frontend to Vercel](#4-deploy-frontend-to-vercel)
+5. [Wire the Two Services Together](#5-wire-the-two-services-together)
+6. [SQLite Limitations on Render](#6-sqlite-limitations-on-render)
 7. [Environment Variable Reference](#7-environment-variable-reference)
 8. [Troubleshooting](#8-troubleshooting)
 
 ---
 
-## 1. Local Development with PostgreSQL
+## 1. Local Development
 
 ### Prerequisites
 
 - Node.js ≥ 18
-- PostgreSQL 14+ running locally (or use Docker)
-
-### Quick start with Docker
-
-```bash
-docker run --name issueflow-pg \
-  -e POSTGRES_USER=issueflow_user \
-  -e POSTGRES_PASSWORD=localpassword \
-  -e POSTGRES_DB=issueflow_dev \
-  -p 5432:5432 -d postgres:16
-```
 
 ### Configure the backend
 
@@ -41,66 +33,41 @@ cd backend
 cp .env.example .env
 ```
 
-Edit `backend/.env`:
+`backend/.env` should contain:
 
 ```env
 PORT=5000
-DATABASE_URL="postgresql://issueflow_user:localpassword@localhost:5432/issueflow_dev"
+DATABASE_URL="file:./prisma/dev.db"
 JWT_SECRET="<generate: node -e \"console.log(require('crypto').randomBytes(48).toString('hex'))\">"
 JWT_EXPIRES_IN="7d"
 CORS_ORIGIN="http://localhost:5173"
 ```
 
-### Configure the frontend (optional for local dev)
-
-In local dev the Vite proxy forwards `/api` to `localhost:5000`, so no frontend env var is needed. If you want to override:
-
-```bash
-cd frontend
-cp .env.example .env.local
-# Leave VITE_API_URL blank for local dev
-```
-
----
-
-## 2. Apply Migrations
-
-### First time (fresh database)
+### Apply schema to the local database
 
 ```bash
 cd backend
-npx prisma migrate deploy
+npx prisma db push
 ```
 
-This applies `prisma/migrations/20261024000000_init/migration.sql` and records it in the `_prisma_migrations` table.
-
-### During development (schema changes)
+### Start the dev server
 
 ```bash
-# Create a new migration for your schema change
-npx prisma migrate dev --name describe_your_change
-```
-
-> **Never** run `prisma migrate dev` against the Render production database. Use `prisma migrate deploy` in production.
-
-### Re-generate the Prisma client after schema changes
-
-```bash
-npx prisma generate
+npm run dev
 ```
 
 ---
 
-## 3. Seed Demo Users
-
-After migrations are applied, seed the database with example data:
+## 2. Seed Demo Users
 
 ```bash
 cd backend
 npm run prisma:seed
 ```
 
-This creates the following accounts (all with password `password123`):
+> **Warning:** The seed script deletes all existing data before inserting.
+
+Demo accounts (all passwords: `password123`):
 
 | Role     | Email                     | Name           |
 |----------|---------------------------|----------------|
@@ -110,127 +77,103 @@ This creates the following accounts (all with password `password123`):
 | Employee | emily@issueflow.com       | Emily Davis    |
 | Employee | marcus@issueflow.com      | Marcus Vance   |
 
-> **Warning:** The seed script deletes all existing data before inserting. Only run it on a fresh or non-critical database.
-
 ---
 
-## 4. Deploy Backend to Render
+## 3. Deploy Backend to Render
 
-### Step 1 — Create a PostgreSQL database on Render
+### Step 1 — Create a Web Service
 
-1. Go to [render.com](https://render.com) → **New** → **PostgreSQL**
-2. Name: `issueflow-db`
-3. Plan: **Free** (or higher for production)
-4. Click **Create Database**
-5. Wait for it to become available, then note:
-   - **Internal Database URL** — used inside Render services
-   - **External Database URL** — used from your local machine to inspect production data
-
-### Step 2 — Create a Web Service for the backend
-
-**Option A — Use `render.yaml` (recommended)**
-
-The `render.yaml` file at the repo root declares the service and database. Render will auto-detect it when you connect your repository.
-
-1. Go to **New** → **Blueprint**
+1. Go to [render.com](https://render.com) → **New** → **Web Service**
 2. Connect your GitHub repo `gokimakannan-coder/issue-management`
-3. Render reads `render.yaml` and creates the service + database automatically
-4. Set `CORS_ORIGIN` manually in the dashboard (see Step 3)
-
-**Option B — Manual setup**
-
-1. Go to **New** → **Web Service**
-2. Connect your GitHub repo
-3. Settings:
+3. Render auto-detects `render.yaml` — confirm the settings:
    - **Root Directory:** `backend`
-   - **Runtime:** Node
    - **Build Command:** `npm install && npm run build`
    - **Start Command:** `npm run start:prod`
 
-### Step 3 — Set environment variables on Render
+### Step 2 — Set environment variables on Render
 
-In the Web Service dashboard → **Environment**:
+Render fills most env vars from `render.yaml`. You must set one manually:
 
-| Key             | Value                                                  |
-|-----------------|--------------------------------------------------------|
-| `NODE_ENV`      | `production`                                           |
-| `PORT`          | `10000`                                                |
-| `DATABASE_URL`  | Paste the **Internal Database URL** from Step 1        |
-| `JWT_SECRET`    | A random 48+ char hex string (generate locally)        |
-| `JWT_EXPIRES_IN`| `7d`                                                   |
-| `CORS_ORIGIN`   | Your Vercel frontend URL, e.g. `https://yourapp.vercel.app` |
+| Key           | Value                                                      |
+|---------------|------------------------------------------------------------|
+| `CORS_ORIGIN` | Your Vercel frontend URL (set after frontend is deployed)  |
 
-Generate a secure JWT secret locally:
+Generate the `JWT_SECRET` automatically — `render.yaml` has `generateValue: true`.
 
-```bash
-node -e "console.log(require('crypto').randomBytes(48).toString('hex'))"
-```
+### Step 3 — Deploy
 
-### Step 4 — Deploy
-
-Push your changes to `main`. Render will:
+Push to `main`. Render will:
 1. Run `npm install && npm run build` (includes `prisma generate && tsc`)
-2. Start with `npm run start:prod` (runs `prisma migrate deploy` then `node dist/server.js`)
+2. Start with `npm run start:prod`:
+   - `prisma db push` — creates/updates the SQLite schema on disk
+   - `npm run prisma:seed` — seeds demo users and sample issues
+   - `node dist/server.js` — starts the API server
 
-Verify the health check endpoint:
+Verify the health check after deploy:
 
 ```
 https://issueflow-backend.onrender.com/api/health
 ```
 
-Expected response:
+Expected:
 ```json
 { "status": "ok", "timestamp": "..." }
 ```
 
-### Step 5 — Seed production data (optional)
-
-To populate the production database with demo data, connect via the **External Database URL** locally:
-
-```bash
-cd backend
-DATABASE_URL="<external-db-url-from-render>" npm run prisma:seed
-```
-
 ---
 
-## 5. Deploy Frontend to Vercel
+## 4. Deploy Frontend to Vercel
 
 1. Go to [vercel.com](https://vercel.com) → **New Project**
 2. Import `gokimakannan-coder/issue-management`
 3. Set **Root Directory** to `frontend`
-4. Build settings (Vercel auto-detects Vite):
-   - **Framework:** Vite
-   - **Build Command:** `npm run build`
-   - **Output Directory:** `dist`
-5. Add environment variable:
-   - `VITE_API_URL` = `https://issueflow-backend.onrender.com` (your Render service URL, **no trailing slash**)
-6. Click **Deploy**
+4. Add environment variable:
+   - `VITE_API_URL` = `https://issueflow-backend.onrender.com` (no trailing slash)
+5. Click **Deploy**
 
 ---
 
-## 6. Wire the Two Services Together
+## 5. Wire the Two Services Together
 
-After both services are live:
-
-1. **Render backend** → Environment → Set `CORS_ORIGIN` to your Vercel URL:
+1. **Render** → Environment → Set `CORS_ORIGIN` to your Vercel URL:
    ```
    https://your-frontend.vercel.app
    ```
-2. **Vercel frontend** → Settings → Environment Variables → Confirm:
-   ```
-   VITE_API_URL=https://issueflow-backend.onrender.com
-   ```
-3. Trigger a redeploy on both services for the env vars to take effect.
+2. Redeploy the Render service so the env var takes effect.
 
 ### How the API URL is resolved
 
-| Environment | `VITE_API_URL`      | Effective `baseURL`                              |
-|-------------|---------------------|--------------------------------------------------|
-| Local dev   | *(not set)*         | `/api` → proxied by Vite to `localhost:5000`     |
-| Production  | `https://…render…` | `https://…render….onrender.com/api`              |
+| Environment | `VITE_API_URL`      | Effective `baseURL`                          |
+|-------------|---------------------|----------------------------------------------|
+| Local dev   | *(not set)*         | `/api` → proxied by Vite to `localhost:5000` |
+| Production  | `https://…render…` | `https://…render….onrender.com/api`          |
 
-No `localhost` is ever used in a production build.
+---
+
+## 6. SQLite Limitations on Render
+
+**Render's free web service disk is ephemeral.** This means:
+
+| Event                        | What happens to the SQLite database        |
+|------------------------------|--------------------------------------------|
+| New deploy / restart         | Database file is recreated from scratch     |
+| Service goes to sleep        | Database file survives until next deploy    |
+| Scale-out (multiple instances) | Each instance has its own separate database |
+
+### Practical impact for your demo
+
+- Every time Render deploys (you push to `main`) or restarts the service, `start:prod` runs `prisma db push` and `prisma:seed` — the database is wiped and rebuilt with demo data.
+- **Any data your friend creates during the demo will be lost on the next deploy or Render restart.**
+- This is fine for a short-lived demo. It is NOT suitable for real users or persistent data.
+
+### When you're ready to go beyond a demo
+
+Switch to PostgreSQL (a persistent external database):
+
+1. Revert `schema.prisma` provider back to `postgresql`.
+2. Create a Render PostgreSQL database (free tier available).
+3. Add a proper `prisma migrate deploy` migration flow.
+4. See git history for the previous PostgreSQL setup, or re-run the migration setup steps.
 
 ---
 
@@ -238,48 +181,40 @@ No `localhost` is ever used in a production build.
 
 ### Backend (`backend/.env`)
 
-| Variable         | Required | Description                                          |
-|------------------|----------|------------------------------------------------------|
-| `PORT`           | No       | HTTP port (default 5000; Render injects 10000)       |
-| `DATABASE_URL`   | Yes      | Full PostgreSQL connection string                    |
-| `JWT_SECRET`     | Yes      | Random secret ≥ 32 chars for signing JWTs            |
-| `JWT_EXPIRES_IN` | No       | Token lifetime (default `7d`)                        |
-| `CORS_ORIGIN`    | No       | Allowed origin (default `*`; set to Vercel URL in prod) |
+| Variable         | Required | Description                                                |
+|------------------|----------|------------------------------------------------------------|
+| `PORT`           | No       | HTTP port (default 5000; Render injects 10000)             |
+| `DATABASE_URL`   | Yes      | SQLite file path, e.g. `file:./prisma/dev.db`              |
+| `JWT_SECRET`     | Yes      | Random secret ≥ 32 chars for signing JWTs                  |
+| `JWT_EXPIRES_IN` | No       | Token lifetime (default `7d`)                              |
+| `CORS_ORIGIN`    | No       | Allowed origin (default `*`; set to Vercel URL in prod)    |
 
 ### Frontend (`frontend/.env.local`)
 
-| Variable       | Required in prod | Description                                          |
-|----------------|------------------|------------------------------------------------------|
-| `VITE_API_URL` | Yes              | Backend base URL without trailing slash              |
+| Variable       | Required in prod | Description                                     |
+|----------------|------------------|-------------------------------------------------|
+| `VITE_API_URL` | Yes              | Backend base URL without trailing slash         |
 
 ---
 
 ## 8. Troubleshooting
 
-### `prisma migrate deploy` fails on first deploy
-
-Ensure `DATABASE_URL` is set before the start command runs. With `render.yaml` the database link is automatic; with manual setup you must add the env var before the first deploy.
-
 ### CORS errors in the browser
 
-- Confirm `CORS_ORIGIN` on Render exactly matches your Vercel URL (no trailing slash, correct protocol).
-- If you changed the Vercel domain, update `CORS_ORIGIN` on Render and redeploy.
+Confirm `CORS_ORIGIN` on Render exactly matches your Vercel URL — no trailing slash, correct protocol (`https://`). Update it and redeploy.
+
+### Free tier cold starts on Render
+
+Render free web services spin down after 15 minutes of inactivity. The first request after a cold start takes ~30 seconds. Upgrade to a paid plan or use an uptime monitor (e.g. UptimeRobot pinging `/api/health` every 5 minutes) to keep it warm.
 
 ### `Cannot find module '@prisma/client'`
 
-The `build` script now runs `prisma generate` before `tsc`. If you bypassed the build script, run:
+The `build` script runs `prisma generate` before `tsc`. If you bypassed it, run:
 
 ```bash
 cd backend && npx prisma generate
 ```
 
-### Free tier cold starts on Render
+### Demo data missing after deploy
 
-Render free web services spin down after 15 minutes of inactivity. The first request after a cold start takes ~30 seconds. Upgrade to a paid plan to avoid this.
-
-### Check migration status
-
-```bash
-# From your local machine using the External DB URL
-DATABASE_URL="<external-url>" npx prisma migrate status
-```
+`start:prod` always re-seeds the database. If the seed fails, check Render logs for errors in `prisma:seed`. The seed script requires all models to exist — make sure `prisma db push` ran first (it does, earlier in `start:prod`).
